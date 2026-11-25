@@ -4,24 +4,38 @@ init python:
     import platform
     import json
     import shutil
+    import base64
+    import hashlib
 
     # Variables globales
     archivos_cargados = []  # Lista de dicts: {"nombre": ..., "tipo": ..., "contenido": ...}
     papelera = []           # Nombres de archivos movidos a la papelera
     visor_archivo_actual = None
 
+    def imagen_web(contenido, nombre):
+        datos = base64.b64decode(contenido.split(",", 1)[1], validate=True)
+        return im.Data(datos, hashlib.sha256(datos).hexdigest() + os.path.splitext(nombre)[1].lower())
+
     def registrar_archivo_web(nombre, tipo, contenido):
         """Guarda un archivo subido desde el navegador y refresca la interfaz."""
         global archivos_cargados
         if not nombre:
             return
+        if tipo == "imagen":
+            try:
+                imagen_web(contenido, nombre)
+            except Exception as e:
+                renpy.log("Imagen no válida: " + str(e))
+                renpy.notify("No se pudo leer la imagen.")
+                return
         archivos_cargados[:] = [a for a in archivos_cargados if a.get("nombre") != nombre]
         if nombre in papelera:
             papelera.remove(nombre)
         archivos_cargados.append({
             "nombre": nombre,
             "tipo": tipo,
-            "contenido": contenido
+            "contenido": contenido,
+            "origen": "web"
         })
         renpy.notify("¡Archivo '" + str(nombre) + "' cargado!")
         renpy.restart_interaction()
@@ -31,25 +45,25 @@ init python:
         if not getattr(renpy, 'emscripten', False):
             return
         try:
-            import emscripten
-            raw = emscripten.run_script("""
+            raw = renpy.emscripten.run_script_string("""
                 (function() {
-                    if (!window._archivoSubidoWeb) return "";
-                    var payload = JSON.stringify(window._archivoSubidoWeb);
-                    window._archivoSubidoWeb = null;
-                    return payload;
+                    var cola = window._archivosPendientesWeb;
+                    return cola && cola.length ? JSON.stringify(cola.shift()) : "";
                 })();
             """)
             if raw:
                 datos = json.loads(raw)
-                if isinstance(datos, dict) and datos.get("nombre"):
+                if datos.get("error"):
+                    renpy.notify(datos["error"])
+                elif isinstance(datos, dict) and datos.get("nombre"):
                     registrar_archivo_web(
                         datos.get("nombre"),
                         datos.get("tipo", "texto"),
                         datos.get("contenido", "")
                     )
-        except Exception:
-            pass
+        except Exception as e:
+            renpy.log("Error de subida web: " + str(e))
+            renpy.notify("No se pudo importar el archivo.")
 
     if _consumir_subida_web not in config.periodic_callbacks:
         config.periodic_callbacks.append(_consumir_subida_web)
@@ -58,12 +72,12 @@ init python:
         es_web = getattr(renpy, 'emscripten', False)
 
         if es_web:
-            import emscripten
-            emscripten.run_script("""
+            renpy.emscripten.run_script("""
                 (function() {
                     var input = document.createElement('input');
                     input.type = 'file';
                     input.accept = '.txt,.rpy,.png,.jpg,.jpeg,.gif,.mp4,.webm,.ogg';
+                    window._archivosPendientesWeb = window._archivosPendientesWeb || [];
 
                     input.onchange = function(e) {
                         var file = e.target.files && e.target.files[0];
@@ -71,24 +85,35 @@ init python:
 
                         var ext = file.name.split('.').pop().toLowerCase();
                         var reader = new FileReader();
+                        if (file.size > 20 * 1024 * 1024) {
+                            window._archivosPendientesWeb.push({error: 'El archivo supera 20 MB.'});
+                            return;
+                        }
+                        if (['txt','rpy','png','jpg','jpeg','gif','mp4','webm','ogg'].indexOf(ext) === -1) {
+                            window._archivosPendientesWeb.push({error: 'Formato no compatible.'});
+                            return;
+                        }
+                        reader.onerror = function() {
+                            window._archivosPendientesWeb.push({error: 'No se pudo leer el archivo.'});
+                        };
 
                         if (['txt', 'rpy'].indexOf(ext) !== -1) {
                             reader.onload = function(ev) {
-                                window._archivoSubidoWeb = {
+                                window._archivosPendientesWeb.push({
                                     nombre: file.name,
                                     tipo: 'texto',
                                     contenido: String(ev.target.result || '')
-                                };
+                                });
                             };
                             reader.readAsText(file, 'UTF-8');
                         } else {
                             reader.onload = function(ev) {
                                 var tipo = (['mp4', 'webm', 'ogg'].indexOf(ext) !== -1) ? 'video' : 'imagen';
-                                window._archivoSubidoWeb = {
+                                window._archivosPendientesWeb.push({
                                     nombre: file.name,
                                     tipo: tipo,
                                     contenido: String(ev.target.result || '')
-                                };
+                                });
                             };
                             reader.readAsDataURL(file);
                         }
@@ -118,7 +143,9 @@ init python:
                         ext = os.path.splitext(nombre)[1].lower()
                         tipo = "imagen" if ext in ['.png', '.jpg', '.jpeg', '.gif'] else ("texto" if ext in ['.txt', '.rpy', '.log', '.json'] else "local")
                         archivos_cargados[:] = [a for a in archivos_cargados if a.get("nombre") != nombre]
-                        archivos_cargados.append({"nombre": nombre, "tipo": tipo, "contenido": destino})
+                        if nombre in papelera:
+                            papelera.remove(nombre)
+                        archivos_cargados.append({"nombre": nombre, "tipo": tipo, "contenido": destino, "origen": "local"})
                         renpy.notify("¡Archivo cargado correctamente!")
             except Exception:
                 renpy.notify("Error al abrir explorador de archivos.")
@@ -137,11 +164,9 @@ init python:
         ext = os.path.splitext(nombre)[1].lower()
 
         # 1. Si viene subido desde Web (contenido en memoria)
-        if item is not None and isinstance(item.get("contenido"), str) and (
-            item["contenido"].startswith("data:") or item.get("tipo") == "texto"
-        ):
+        if item is not None and item.get("origen") == "web":
             if item.get("tipo") == "imagen" or item["contenido"].startswith("data:image"):
-                visor_archivo_actual = item["contenido"]
+                visor_archivo_actual = imagen_web(item["contenido"], nombre)
                 renpy.show_screen("visor_imagenes")
                 renpy.restart_interaction()
                 return
@@ -150,6 +175,27 @@ init python:
                 renpy.show_screen("visor_texto", titulo=nombre, contenido=visor_archivo_actual)
                 renpy.restart_interaction()
                 return
+
+            elif item.get("tipo") == "video":
+                renpy.emscripten.run_script("""
+                    (function(data) {
+                        var panel = document.createElement("div");
+                        panel.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:#000d;display:flex;flex-direction:column;align-items:center;justify-content:center;";
+                        var video = document.createElement("video");
+                        video.controls = true;
+                        video.style.cssText = "max-width:90vw;max-height:80vh;";
+                        video.src = data;
+                        var close = document.createElement("button");
+                        close.textContent = "Cerrar";
+                        close.onclick = function() { video.pause(); video.removeAttribute("src"); video.load(); panel.remove(); };
+                        panel.appendChild(close);
+                        panel.appendChild(video);
+                        document.body.appendChild(panel);
+                    })(%s);
+                """ % json.dumps(item["contenido"]))
+                return
+            renpy.notify("Formato no compatible.")
+            return
 
         # 2. Ruta local en carpeta historias (PC / escritorio)
         ruta_completa = os.path.join(config.gamedir, "historias", nombre)
