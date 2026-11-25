@@ -45,7 +45,8 @@ init python:
         if not getattr(renpy, 'emscripten', False):
             return
         try:
-            raw = renpy.emscripten.run_script_string("""
+            import emscripten
+            raw = emscripten.run_script_string("""
                 (function() {
                     var cola = window._archivosPendientesWeb;
                     return cola && cola.length ? JSON.stringify(cola.shift()) : "";
@@ -72,11 +73,12 @@ init python:
         es_web = getattr(renpy, 'emscripten', False)
 
         if es_web:
-            renpy.emscripten.run_script("""
+            import emscripten
+            emscripten.run_script("""
                 (function() {
                     var input = document.createElement('input');
                     input.type = 'file';
-                    input.accept = '.txt,.rpy,.png,.jpg,.jpeg,.gif,.mp4,.webm,.ogg';
+                    input.accept = '.txt,.rpy,.png,.jpg,.jpeg,.gif,.mp4,.webm,.ogg,.pdf';
                     window._archivosPendientesWeb = window._archivosPendientesWeb || [];
 
                     input.onchange = function(e) {
@@ -89,7 +91,7 @@ init python:
                             window._archivosPendientesWeb.push({error: 'El archivo supera 20 MB.'});
                             return;
                         }
-                        if (['txt','rpy','png','jpg','jpeg','gif','mp4','webm','ogg'].indexOf(ext) === -1) {
+                        if (['txt','rpy','png','jpg','jpeg','gif','mp4','webm','ogg','pdf'].indexOf(ext) === -1) {
                             window._archivosPendientesWeb.push({error: 'Formato no compatible.'});
                             return;
                         }
@@ -108,7 +110,7 @@ init python:
                             reader.readAsText(file, 'UTF-8');
                         } else {
                             reader.onload = function(ev) {
-                                var tipo = (['mp4', 'webm', 'ogg'].indexOf(ext) !== -1) ? 'video' : 'imagen';
+                                var tipo = (['mp4', 'webm', 'ogg'].indexOf(ext) !== -1) ? 'video' : (ext === 'pdf' ? 'pdf' : 'imagen');
                                 window._archivosPendientesWeb.push({
                                     nombre: file.name,
                                     tipo: tipo,
@@ -176,18 +178,22 @@ init python:
                 renpy.restart_interaction()
                 return
 
-            elif item.get("tipo") == "video":
-                renpy.emscripten.run_script("""
+            elif item.get("tipo") in ("video", "pdf"):
+                import emscripten
+                emscripten.run_script("""
                     (function(data) {
                         var panel = document.createElement("div");
                         panel.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:#000d;display:flex;flex-direction:column;align-items:center;justify-content:center;";
-                        var video = document.createElement("video");
+                        var pdf = data.indexOf("data:application/pdf") === 0;
+                        var video = document.createElement(pdf ? "iframe" : "video");
+                        var blob = URL.createObjectURL(new Blob([Uint8Array.from(atob(data.split(",")[1]), function(ch) { return ch.charCodeAt(0); })], {type: pdf ? "application/pdf" : data.slice(5, data.indexOf(";"))}));
                         video.controls = true;
                         video.style.cssText = "max-width:90vw;max-height:80vh;";
-                        video.src = data;
+                        video.src = blob;
+                        if (pdf) { video.style.width = "90vw"; video.style.height = "80vh"; }
                         var close = document.createElement("button");
                         close.textContent = "Cerrar";
-                        close.onclick = function() { video.pause(); video.removeAttribute("src"); video.load(); panel.remove(); };
+                        close.onclick = function() { if (!pdf) video.pause(); panel.remove(); URL.revokeObjectURL(blob); };
                         panel.appendChild(close);
                         panel.appendChild(video);
                         document.body.appendChild(panel);
@@ -236,7 +242,7 @@ init python:
         ]
         ruta_historias = os.path.join(config.gamedir, "historias")
         if os.path.exists(ruta_historias):
-            exts = ('.txt', '.rpy', '.png', '.jpg', '.jpeg', '.mp4', '.webm')
+            exts = ('.txt', '.rpy', '.png', '.jpg', '.jpeg', '.gif', '.mp4', '.webm', '.pdf')
             for f in os.listdir(ruta_historias):
                 if f.lower().endswith(exts) and f not in nombres and f not in papelera:
                     nombres.append(f)
