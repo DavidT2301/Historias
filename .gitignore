@@ -1,0 +1,27 @@
+# Ren'Py: archivos generados
+*.rpyc
+*.rpymc
+**/cache/
+**/saves/
+**/persistent
+log.txt
+traceback.txt
+errors.txt
+lint.txt
+
+# Compilaciones y SDK
+*-dists/
+*-web/
+renpy-*-sdk/
+*.zip
+*.tar.bz2
+
+# Archivos del sistema/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+.env
+.env.*
