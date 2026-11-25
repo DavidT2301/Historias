@@ -4,7 +4,7 @@ Proyecto multimedia desarrollado con Ren'Py. Presenta una novela visual mediante
 
 ## Demostración y descargas
 
-- [Versión web corregida en Netlify](https://stupendous-chebakia-5d6170.netlify.app/)
+- [Versión web corregida en Netlify](https://subtle-wisp-6a00ac.netlify.app)
 - [Versiones descargables (Releases)](https://github.com/DavidT2301/Historias/releases)
 
 ## Funcionalidades
