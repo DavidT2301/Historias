@@ -41,11 +41,3 @@ Ren'Py 8.5.3, Python, JavaScript, Emscripten/WebAssembly, GitHub y Netlify.
 2. Seleccionar Web (Beta) en el Launcher y generar la distribución web.
 3. Descomprimir el resultado y publicar en Netlify la carpeta que contiene index.html.
 4. Probar la importación y apertura de PNG/JPG, TXT, PDF y MP4 desde el escritorio virtual. Para abrir un archivo importado, utilizar clic derecho.
-
-## Estado de validación
-
-La corrección de importación se integró en main mediante el [PR #2](https://github.com/DavidT2301/Historias/pull/2). La compilación web se reportó exitosa; la validación interactiva completa en navegador continúa pendiente. No se garantiza compatibilidad con todos los códecs ni visores PDF.
-
-## Colaboración
-
-Consultar [CONTRIBUTING.md](CONTRIBUTING.md) y [CHANGELOG.md](CHANGELOG.md). Los nombres de integrantes y la licencia se añadirán cuando el equipo los confirme. Los derechos de los recursos de terceros deben respetarse.
