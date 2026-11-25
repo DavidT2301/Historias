@@ -628,27 +628,21 @@ screen main_menu():
                 droppable False
                 dragged elemento_soltado_en_papelera
                 
-                # Clic derecho / secundario para abrir
+                clicked abrir_icono
                 alternate Function(abrir_archivo, archivo)
 
                 vbox:
                     spacing 5
                     xmaximum 110
 
-                    if _item_web is not None and isinstance(_item_web.get("contenido"), str) and _item_web["contenido"].startswith("data:image"):
+                    if _item_web and _item_web.get("origen") == "web" and _item_web["tipo"] == "imagen" and not isinstance(_item_web["contenido"], str):
                         add Transform(_item_web["contenido"], size=(50, 50), xalign=0.5)
-                    elif archivo.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    elif not (_item_web and getattr(renpy, "emscripten", False)) and archivo.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
                         add Transform("historias/" + archivo, size=(50, 50), xalign=0.5)
-                    elif archivo.lower().endswith(('.doc', '.docx')):
-                        add "gui/folder.png" xalign 0.5 zoom 0.25
-                    elif archivo.lower().endswith('.pdf'):
-                        add "gui/folder.png" xalign 0.5 zoom 0.25
-                    elif archivo.lower().endswith(('.txt', '.rpy')):
-                        add "gui/folder.png" xalign 0.5 zoom 0.25
                     else:
                         add "gui/folder.png" xalign 0.5 zoom 0.25
 
-                    text archivo size 10 color "#ffffff" text_align 0.5 xalign 0.5
+                    text "[archivo!q]" size 10 color "#ffffff" text_align 0.5 xalign 0.5
 
     # BARRA DE TAREAS INFERIOR
     frame:
@@ -740,7 +734,7 @@ screen visor_texto(titulo, contenido):
                 background Solid("#000080")
                 hbox:
                     xpos 5 yalign 0.5
-                    text titulo size 12 color "#ffffff" bold True
+                    text "[titulo!q]" size 12 color "#ffffff" bold True
                 
                 textbutton " X " action Hide("visor_texto"):
                     xalign 1.0 yalign 0.5
@@ -757,7 +751,7 @@ screen visor_texto(titulo, contenido):
                     draggable True
                     mousewheel True
                     scrollbars "vertical"
-                    text contenido color "#000000" size 14
+                    text "[contenido!q]" color "#000000" size 14
 
 
 style main_menu_frame is empty

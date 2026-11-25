@@ -3,6 +3,7 @@ init python:
     import subprocess
     import platform
     import json
+    import base64
     import shutil
 
     # Variables globales
@@ -15,44 +16,37 @@ init python:
         global archivos_cargados
         if not nombre:
             return
+        if tipo == "imagen":
+            try:
+                datos = base64.b64decode(contenido.split(",", 1)[1], validate=True)
+                contenido = im.Data(datos, nombre)
+                contenido.load()
+            except Exception as error:
+                renpy.log("Error al leer la imagen: " + str(error))
+                renpy.notify("No se pudo leer la imagen.")
+                return
+
         archivos_cargados[:] = [a for a in archivos_cargados if a.get("nombre") != nombre]
         if nombre in papelera:
             papelera.remove(nombre)
         archivos_cargados.append({
             "nombre": nombre,
             "tipo": tipo,
+            "origen": "web",
             "contenido": contenido
         })
         renpy.notify("¡Archivo '" + str(nombre) + "' cargado!")
         renpy.restart_interaction()
 
     def _consumir_subida_web():
-        """Recoge de forma segura el archivo leído por JavaScript en el navegador."""
-        if not getattr(renpy, 'emscripten', False):
-            return
-        try:
-            import emscripten
-            raw = emscripten.run_script("""
-                (function() {
-                    if (!window._archivoSubidoWeb) return "";
-                    var payload = JSON.stringify(window._archivoSubidoWeb);
-                    window._archivoSubidoWeb = null;
-                    return payload;
-                })();
-            """)
-            if raw:
-                datos = json.loads(raw)
-                if isinstance(datos, dict) and datos.get("nombre"):
-                    registrar_archivo_web(
-                        datos.get("nombre"),
-                        datos.get("tipo", "texto"),
-                        datos.get("contenido", "")
-                    )
-        except Exception:
-            pass
-
-    if _consumir_subida_web not in config.periodic_callbacks:
-        config.periodic_callbacks.append(_consumir_subida_web)
+        """El navegador llama a esta función cuando termina de leer un archivo."""
+        import emscripten
+        raw = emscripten.run_script_string("JSON.stringify(window.expedienteSubidas.shift())")
+        datos = json.loads(raw)
+        if "error" in datos:
+            renpy.notify(datos["error"])
+        else:
+            registrar_archivo_web(datos["nombre"], datos["tipo"], datos["contenido"])
 
     def subir_archivo_multimedia():
         es_web = getattr(renpy, 'emscripten', False)
@@ -61,37 +55,46 @@ init python:
             import emscripten
             emscripten.run_script("""
                 (function() {
-                    var input = document.createElement('input');
+                    const input = document.createElement('input');
                     input.type = 'file';
-                    input.accept = '.txt,.rpy,.png,.jpg,.jpeg,.gif,.mp4,.webm,.ogg';
+                    input.accept = '.txt,.rpy,.png,.jpg,.jpeg,.gif,.mp4,.webm,.ogg,.pdf';
+                    input.hidden = true;
+                    document.body.appendChild(input);
+                    input.oncancel = () => input.remove();
 
-                    input.onchange = function(e) {
-                        var file = e.target.files && e.target.files[0];
+                    async function entregar(datos) {
+                        window.expedienteSubidas = window.expedienteSubidas || [];
+                        window.expedienteSubidas.push(datos);
+                        try {
+                            await window.renpy_exec("_consumir_subida_web()");
+                        } catch (error) {
+                            console.error("Error al importar el archivo en Ren'Py", error);
+                            window.alert("No se pudo importar el archivo.");
+                        }
+                    }
+
+                    input.onchange = () => {
+                        const file = input.files[0];
+                        input.remove();
                         if (!file) return;
 
-                        var ext = file.name.split('.').pop().toLowerCase();
-                        var reader = new FileReader();
-
-                        if (['txt', 'rpy'].indexOf(ext) !== -1) {
-                            reader.onload = function(ev) {
-                                window._archivoSubidoWeb = {
-                                    nombre: file.name,
-                                    tipo: 'texto',
-                                    contenido: String(ev.target.result || '')
-                                };
-                            };
-                            reader.readAsText(file, 'UTF-8');
-                        } else {
-                            reader.onload = function(ev) {
-                                var tipo = (['mp4', 'webm', 'ogg'].indexOf(ext) !== -1) ? 'video' : 'imagen';
-                                window._archivoSubidoWeb = {
-                                    nombre: file.name,
-                                    tipo: tipo,
-                                    contenido: String(ev.target.result || '')
-                                };
-                            };
-                            reader.readAsDataURL(file);
+                        const ext = file.name.split('.').pop().toLowerCase();
+                        if (!input.accept.split(',').includes('.' + ext) || !file.name.includes('.')) {
+                            entregar({error: 'Formato no compatible.'});
+                            return;
                         }
+                        if (file.size > 20 * 1024 * 1024) {
+                            entregar({error: 'El archivo supera 20 MB.'});
+                            return;
+                        }
+
+                        const tipos = {txt: 'texto', rpy: 'texto', mp4: 'video', webm: 'video', ogg: 'video', pdf: 'pdf'};
+                        const tipo = tipos[ext] || 'imagen';
+                        const reader = new FileReader();
+                        reader.onerror = () => entregar({error: 'No se pudo leer el archivo.'});
+                        reader.onload = () => entregar({nombre: file.name, tipo, contenido: reader.result});
+                        if (tipo === 'texto') reader.readAsText(file, 'UTF-8');
+                        else reader.readAsDataURL(file);
                     };
 
                     input.click();
@@ -118,6 +121,8 @@ init python:
                         ext = os.path.splitext(nombre)[1].lower()
                         tipo = "imagen" if ext in ['.png', '.jpg', '.jpeg', '.gif'] else ("texto" if ext in ['.txt', '.rpy', '.log', '.json'] else "local")
                         archivos_cargados[:] = [a for a in archivos_cargados if a.get("nombre") != nombre]
+                        if nombre in papelera:
+                            papelera.remove(nombre)
                         archivos_cargados.append({"nombre": nombre, "tipo": tipo, "contenido": destino})
                         renpy.notify("¡Archivo cargado correctamente!")
             except Exception:
@@ -137,19 +142,21 @@ init python:
         ext = os.path.splitext(nombre)[1].lower()
 
         # 1. Si viene subido desde Web (contenido en memoria)
-        if item is not None and isinstance(item.get("contenido"), str) and (
-            item["contenido"].startswith("data:") or item.get("tipo") == "texto"
-        ):
-            if item.get("tipo") == "imagen" or item["contenido"].startswith("data:image"):
-                visor_archivo_actual = item["contenido"]
+        if item is not None and (item.get("origen") == "web" or getattr(renpy, "emscripten", False)):
+            contenido = item["contenido"]
+            tipo = item["tipo"]
+            if tipo == "imagen":
+                if isinstance(contenido, str):  # Archivos de versiones anteriores.
+                    contenido = im.Data(base64.b64decode(contenido.split(",", 1)[1]), nombre)
+                visor_archivo_actual = contenido
                 renpy.show_screen("visor_imagenes")
-                renpy.restart_interaction()
-                return
-            elif item.get("tipo") == "texto" or ext in ['.txt', '.rpy', '.log', '.json']:
-                visor_archivo_actual = item["contenido"]
-                renpy.show_screen("visor_texto", titulo=nombre, contenido=visor_archivo_actual)
-                renpy.restart_interaction()
-                return
+            elif tipo == "texto":
+                visor_archivo_actual = contenido
+                renpy.show_screen("visor_texto", titulo=nombre, contenido=contenido)
+            elif tipo in ("video", "pdf"):
+                abrir_multimedia_web(tipo, contenido)
+            renpy.restart_interaction()
+            return
 
         # 2. Ruta local en carpeta historias (PC / escritorio)
         ruta_completa = os.path.join(config.gamedir, "historias", nombre)
@@ -182,6 +189,28 @@ init python:
                         subprocess.call(["xdg-open", ruta_completa])
                 except Exception:
                     renpy.notify("No se pudo abrir el archivo externamente.")
+
+    def abrir_multimedia_web(tipo, contenido):
+        import emscripten
+        emscripten.run_script("""
+            (function(tipo, data) {
+                const panel = document.createElement('dialog');
+                const cerrar = document.createElement('button');
+                cerrar.textContent = 'Cerrar';
+                cerrar.onclick = () => panel.close();
+                const medio = document.createElement(tipo === 'pdf' ? 'iframe' : 'video');
+                const mime = tipo === 'pdf' ? 'application/pdf' : data.slice(5, data.indexOf(';'));
+                const bytes = Uint8Array.from(atob(data.split(',')[1]), c => c.charCodeAt(0));
+                const url = URL.createObjectURL(new Blob([bytes], {type: mime}));
+                medio.src = url;
+                medio.controls = true;
+                medio.style.cssText = 'display:block;width:80vw;height:75vh;border:0';
+                panel.onclose = () => { panel.remove(); URL.revokeObjectURL(url); };
+                panel.append(cerrar, medio);
+                document.body.appendChild(panel);
+                panel.showModal();
+            })(%s, %s);
+        """ % (json.dumps(tipo), json.dumps(contenido)))
 
     def obtener_historias():
         nombres = [
@@ -223,6 +252,9 @@ init python:
         papelera.clear()
         renpy.notify("Papelera vaciada por completo.")
         renpy.restart_interaction()
+
+    def abrir_icono(drag):
+        abrir_archivo(drag.drag_name)
 
     def elemento_soltado_en_papelera(drags, drop):
         if drop is not None and drop.drag_name == "papelera":
